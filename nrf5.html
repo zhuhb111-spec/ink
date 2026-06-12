@@ -2,21 +2,39 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>高级 nRF5 蓝牙墨水屏传图工具 Pro</title>
     <style>
-        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f5f5f7; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h1 { color: #1d1d1f; font-size: 24px; text-align: center; }
-        .btn { display: block; width: 100%; padding: 12px; background: #0071e3; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; text-align: center; text-decoration: none; }
-        .btn:hover { background: #0077ed; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f0f0; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
+        #canvasArea { border: 2px dashed #ccc; margin: 20px 0; width: 100%; min-height: 200px; display: flex; align-items: center; justify-content: center; }
+        .btn { width: 100%; padding: 12px; background: #007AFF; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 10px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>高级 nRF5 蓝牙墨水屏传图工具 Pro</h1>
-        <p>系统已成功升级至 Pro 版本。全新优化了图片压缩算法与蓝牙传输稳定性。</p>
-        <button class="btn" onclick="alert('蓝牙初始化中...')">连接墨水屏</button>
+    <div class="card">
+        <h1>nRF5 传图工具 Pro</h1>
+        <input type="file" id="fileInput" accept="image/*">
+        <div id="canvasArea"><canvas id="previewCanvas"></canvas></div>
+        <button class="btn" onclick="connectBluetooth()">连接墨水屏</button>
     </div>
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        fileInput.addEventListener('change', function(e) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.getElementById('previewCanvas');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    canvas.getContext('2d').drawImage(img, 0, 0);
+                    alert("图片已加载至缩放区域");
+                }
+                img.src = event.target.result;
+            }
+            reader.readAsDataURL(e.target.files[0]);
+        });
+        function connectBluetooth() { alert("尝试连接蓝牙..."); }
+    </script>
 </body>
 </html>
