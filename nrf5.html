@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>nRF5 墨水屏传图工具</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #f5f5f5;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- allow="bluetooth" 是确保该网页在你的域名下仍能正常调用蓝牙的关键 -->
+  <iframe 
+    src="https://ycd12.github.io/EPD-nRF5_DYC/html/index.html" 
+    allow="bluetooth">
+  </iframe>
+
+</body>
+</html>
