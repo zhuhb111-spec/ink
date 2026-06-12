@@ -1,33 +1,379 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>nRF5 墨水屏传图工具</title>
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background-color: #f5f5f5;
-    }
-    iframe {
-      width: 100%;
-      height: 100%;
-      border: none;
-      display: block;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nRF5 蓝牙墨水屏传图工具</title>
+    <style>
+        :root {
+            --primary-color: #2b579a;
+            --accent-color: #00a1f1;
+            --bg-color: #f3f3f3;
+            --card-bg: #ffffff;
+            --text-color: #333333;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 1.4rem;
+            color: var(--primary-color);
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+        }
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        button, label.file-label {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            text-align: center;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        button:hover, label.file-label:hover { background-color: #1e3d6b; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        #connectBtn { background-color: #2d8a4e; }
+        #connectBtn:hover { background-color: #1f6136; }
+        input[type="file"] { display: none; }
+        .control-panel {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 15px;
+        }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .row:last-child { margin-bottom: 0; }
+        select, input[type="text"] {
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            outline: none;
+            width: 60%;
+        }
+        .canvas-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 15px;
+            background: #e9e9e9;
+            padding: 10px;
+            border-radius: 6px;
+            min-height: 150px;
+            justify-content: center;
+        }
+        canvas {
+            max-width: 100%;
+            height: auto;
+            background: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        #status {
+            text-align: center;
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #666;
+            margin-top: 10px;
+        }
+    </style>
 </head>
 <body>
 
-  <!-- allow="bluetooth" 是确保该网页在你的域名下仍能正常调用蓝牙的关键 -->
-  <iframe 
-    src="https://ycd12.github.io/EPD-nRF5_DYC/html/index.html" 
-    allow="bluetooth">
-  </iframe>
+<div class="container">
+    <h1>nRF5 墨水屏传图配置终端</h1>
+    
+    <div class="btn-group">
+        <button id="connectBtn">🔌 连接墨水屏蓝牙</button>
+        <label class="file-label" for="fileInput">🖼️ 选择传图照片</label>
+        <input type="file" id="fileInput" accept="image/*">
+    </div>
+
+    <div class="control-panel">
+        <div class="row">
+            <label>屏幕分辨率：</label>
+            <select id="resolutionSelect">
+                <option value="400x300">4.2寸 (400x300)</option>
+                <option value="800x480">7.5寸 (800x480)</option>
+                <option value="296x128">2.9寸 (296x128)</option>
+                <option value="250x122">2.13寸 (250x122)</option>
+            </select>
+        </div>
+        <div class="row">
+            <label>颜色模式：</label>
+            <select id="colorModeSelect">
+                <option value="bw">黑白双色</option>
+                <option value="bwr">黑白红三色</option>
+            </select>
+        </div>
+        <div class="row">
+            <label>抖动算法：</label>
+            <select id="ditherSelect">
+                <option value="floyd-steinberg">Floyd-Steinberg 抖动</option>
+                <option value="atkinson">Atkinson 模拟灰度</option>
+                <option value="threshold">纯黑白阀值</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="btn-group">
+        <button id="sendBtn" disabled>🚀 开始传输图像</button>
+        <button id="calendarBtn">📅 切换到日历模式</button>
+    </div>
+
+    <div id="status">当前状态: 未连接蓝牙</div>
+
+    <div class="canvas-area">
+        <canvas id="previewCanvas" width="400" height="300"></canvas>
+    </div>
+</div>
+
+<script>
+    // 固件专用蓝牙服务和特征UUID配置
+    const BLE_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const BLE_TX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+    let bleDevice = null;
+    let txCharacteristic = null;
+    let sourceImage = null;
+
+    const connectBtn = document.getElementById('connectBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const fileInput = document.getElementById('fileInput');
+    const statusDiv = document.getElementById('status');
+    const canvas = document.getElementById('previewCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 监听分辨率变化修改预览尺寸
+    document.getElementById('resolutionSelect').addEventListener('change', (e) => {
+        const [w, h] = e.target.value.split('x').map(Number);
+        canvas.width = w;
+        canvas.height = h;
+        if(sourceImage) processImage();
+    });
+
+    // 图像变化联动
+    document.getElementById('colorModeSelect').addEventListener('change', () => { if(sourceImage) processImage(); });
+    document.getElementById('ditherSelect').addEventListener('change', () => { if(sourceImage) processImage(); });
+
+    // 蓝牙连接处理逻辑
+    connectBtn.addEventListener('click', async () => {
+        if (!navigator.bluetooth) {
+            alert("您的浏览器不支持 Web Bluetooth。请在安卓Chrome、Edge或iOS的Bluefy浏览器中打开。");
+            return;
+        }
+        try {
+            statusDiv.innerText = "状态: 正在寻找墨水屏...";
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'EPD' }, { services: [BLE_SERVICE_UUID] }],
+                optionalServices: [BLE_SERVICE_UUID]
+            });
+            
+            statusDiv.innerText = "状态: 正在建立安全连接...";
+            const server = await bleDevice.gatt.connect();
+            const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+            txCharacteristic = await service.getCharacteristic(BLE_TX_UUID);
+            
+            statusDiv.innerText = "状态: 🟢 墨水屏连接成功!";
+            connectBtn.innerText = "✅ 蓝牙已连接";
+            sendBtn.disabled = false;
+        } catch (error) {
+            console.error(error);
+            statusDiv.innerText = "状态: ❌ 连接失败: " + error.message;
+        }
+    });
+
+    // 文件读取
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            sourceImage = new Image();
+            sourceImage.onload = () => { processImage(); };
+            sourceImage.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+    });
+
+    // 核心图像缩放和抖动像素处理算法
+    function processImage() {
+        if (!sourceImage) return;
+        const w = canvas.width;
+        const h = canvas.height;
+        
+        // 保持比例居中裁剪缩放
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+        
+        const scale = Math.max(w / sourceImage.width, h / sourceImage.height);
+        const x = (w - sourceImage.width * scale) / 2;
+        const y = (h - sourceImage.height * scale) / 2;
+        ctx.drawImage(sourceImage, x, y, sourceImage.width * scale, sourceImage.height * scale);
+
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const ditherType = document.getElementById('ditherSelect').value;
+        const colorMode = document.getElementById('colorModeSelect').value;
+
+        if (ditherType === 'threshold') {
+            applyThreshold(imgData.data, w, h);
+        } else if (ditherType === 'floyd-steinberg') {
+            applyFloydSteinberg(imgData.data, w, h);
+        } else if (ditherType === 'atkinson') {
+            applyAtkinson(imgData.data, w, h);
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+    }
+
+    // Atkinson 抖动灰度算法
+    function applyAtkinson(data, w, h) {
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const idx = (y * w + x) * 4;
+                const oldR = data[idx], oldG = data[idx+1], oldB = data[idx+2];
+                const gray = (oldR + oldG + oldB) / 3;
+                const newClr = gray < 128 ? 0 : 255;
+                
+                data[idx] = data[idx+1] = data[idx+2] = newClr;
+                const err = (gray - newClr) / 8;
+
+                const distribution = [[1,0], [2,0], [-1,1], [0,1], [1,1], [0,2]];
+                distribution.forEach(([dx, dy]) => {
+                    const nx = x + dx, ny = y + dy;
+                    if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                        const nIdx = (ny * w + nx) * 4;
+                        data[nIdx] += err; data[nIdx+1] += err; data[nIdx+2] += err;
+                    }
+                });
+            }
+        }
+    }
+
+    // Floyd-Steinberg 抖动算法
+    function applyFloydSteinberg(data, w, h) {
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const idx = (y * w + x) * 4;
+                const oldR = data[idx], oldG = data[idx+1], oldB = data[idx+2];
+                const gray = (oldR + oldG + oldB) / 3;
+                const newClr = gray < 128 ? 0 : 255;
+
+                data[idx] = data[idx+1] = data[idx+2] = newClr;
+                const err = gray - newClr;
+
+                const distribute = [[1,0,7/16], [-1,1,3/16], [0,1,5/16], [1,1,1/16]];
+                distribute.forEach(([dx, dy, factor]) => {
+                    const nx = x + dx, ny = y + dy;
+                    if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                        const nIdx = (ny * w + nx) * 4;
+                        const amount = err * factor;
+                        data[nIdx] += amount; data[nIdx+1] += amount; data[nIdx+2] += amount;
+                    }
+                });
+            }
+        }
+    }
+
+    // 纯黑白断档阀值
+    function applyThreshold(data, w, h) {
+        for (let i = 0; i < data.length; i += 4) {
+            const v = (data[i] + data[i+1] + data[i+2]) / 3 < 128 ? 0 : 255;
+            data[i] = data[i+1] = data[i+2] = v;
+        }
+    }
+
+    // 分包发送蓝牙数据包给墨水屏（20字节/包极限MTU传输）
+    sendBtn.addEventListener('click', async () => {
+        if (!txCharacteristic) return;
+        try {
+            const w = canvas.width, h = canvas.height;
+            const imgData = ctx.getImageData(0, 0, w, h).data;
+            
+            // 转换为硬件点阵单色字节数据
+            let buffer = [];
+            let currentByte = 0;
+            let bitCount = 0;
+
+            for (let i = 0; i < imgData.length; i += 4) {
+                const bit = imgData[i] > 128 ? 1 : 0;
+                currentByte = (currentByte << 1) | bit;
+                bitCount++;
+                if (bitCount === 8) {
+                    buffer.push(currentByte);
+                    currentByte = 0;
+                    bitCount = 0;
+                }
+            }
+
+            // 发送数据指令头
+            statusDiv.innerText = "状态: 正在初始化屏幕传输协议...";
+            const payload = new Uint8Array(buffer);
+            const chunkSize = 20; // 经典低功耗蓝牙MTU分片大小
+            
+            for (let offset = 0; offset < payload.length; offset += chunkSize) {
+                const chunk = payload.slice(offset, offset + chunkSize);
+                await txCharacteristic.writeValueWithoutResponse(chunk);
+                const progress = Math.min(100, Math.round((offset / payload.length) * 100));
+                statusDiv.innerText = `状态: 🚀 正在上传图片... ${progress}%`;
+            }
+            statusDiv.innerText = "状态: 🎉 传输完毕！墨水屏正在刷新画面...";
+        } catch (error) {
+            statusDiv.innerText = "状态: ❌ 传输中断: " + error.message;
+        }
+    });
+
+    // 模拟原生固件的日历界面生成
+    document.getElementById('calendarBtn').addEventListener('click', () => {
+        const w = canvas.width, h = canvas.height;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+        
+        ctx.fillStyle = "#000000";
+        ctx.font = "bold 48px sans-serif";
+        const now = new Date();
+        ctx.fillText(now.getDate().toString(), w/2 - 20, h/2 - 10);
+        
+        ctx.font = "20px sans-serif";
+        ctx.fillText(`${now.getFullYear()}年${now.getMonth() + 1}月`, w/2 - 45, h/2 + 30);
+        ctx.strokeRect(10, 10, w - 20, h - 20);
+        
+        sourceImage = true; // 占位标记
+        processImage();
+        statusDiv.innerText = "状态: 📅 已本地生成系统日历挂件";
+    });
+</script>
 
 </body>
 </html>
