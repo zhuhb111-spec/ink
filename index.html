@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ESP32七色墨水屏 蓝牙传图(智能裁剪版)</title>
+<title>ESP32七色墨水屏 蓝牙传图(手动微调版)</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system}
 body{padding:16px;background:#f5f5f5}
@@ -12,13 +12,19 @@ h2{text-align:center;margin-bottom:20px;color:#333}
 .btn{display:block;width:100%;padding:12px;margin:8px 0;border:none;border-radius:8px;font-size:16px;cursor:pointer;font-weight:bold;transition:background 0.2s}
 .btn-blue{background:#007aff;color:#fff}
 .btn-blue:hover{background:#0063cc}
+.btn-green{background:#34c759;color:#fff}
+.btn-green:hover{background:#28a745}
+.btn-orange{background:#ff9500;color:#fff}
+.btn-orange:hover{background:#e08200}
 .btn:disabled{background:#ccc;cursor:not-allowed}
 #file-input{display:none}
-.img-preview{width:100%;height:auto;margin:12px 0;border:1px solid #eee;border-radius:8px;display:block}
 .info{margin:12px 0;padding:10px;background:#f0f0f0;border-radius:6px;font-size:14px;border-left:4px solid #007aff;word-break:break-all}
 .row{margin:10px 0}
 label{display:block;margin:6px 0;font-weight:500}
-select,input{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:15px}
+select,input[type="range"]{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:15px}
+.crop-box{background:#e9f4ff;padding:14px;border-radius:8px;margin:12px 0;border:1px dashed #007aff}
+.crop-box label{display:flex;justify-content:between;align-items:center}
+#previewCanvas{width:100%;border:2px dashed #ccc;border-radius:8px;margin:8px 0;display:block;background:#eaeaea}
 </style>
 </head>
 <body>
@@ -26,7 +32,7 @@ select,input{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;fon
   <h2>七色墨水屏 蓝牙传图</h2>
  
   <button class="btn btn-blue" id="connectBtn">连接蓝牙设备</button>
-  <div class="info" id="status">状态：未连接 (由于浏览器安全限制，请确保使用 HTTPS 访问)</div>
+  <div class="info" id="status">状态：未连接 (请确保使用 HTTPS 访问)</div>
  
   <div class="row">
     <label>屏幕分辨率</label>
@@ -56,8 +62,20 @@ select,input{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;fon
   <button class="btn btn-blue" id="selectImgBtn">选择图片</button>
   <input type="file" id="file-input" accept="image/*">
   
-  <label>效果预览（智能等比裁剪+七色处理）：</label>
-  <canvas id="previewCanvas" style="width:100%; border:1px solid #eee; border-radius:8px; margin:8px 0;"></canvas>
+  <!-- 手动裁剪与缩放控制器 -->
+  <div class="crop-box" id="cropControls" style="display:none;">
+    <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+      <strong>🔍 缩放大小: <span id="zoomVal">100%</span></strong>
+    </div>
+    <input type="range" id="zoomRange" min="20" max="400" value="100">
+    <p style="font-size:12px; color:#666; margin-top:8px;">💡 技巧：可以在下方图片上【按住左键拖拽】来调整显示位置。</p>
+    <button class="btn btn-green" id="confirmCropBtn">确认当前布局并生成墨水屏预览</button>
+  </div>
+
+  <button class="btn btn-orange" id="reCropBtn" style="display:none;">🔓 重新调整大小与位置</button>
+ 
+  <label id="canvasLabel">图片视口：</label>
+  <canvas id="previewCanvas"></canvas>
  
   <button class="btn btn-blue" id="sendBtn" disabled>发送到屏幕</button>
 </div>
@@ -72,12 +90,27 @@ const status = document.getElementById('status');
 const resSelect = document.getElementById('resSelect');
 const ditherSelect = document.getElementById('ditherSelect');
 const screenSel = document.getElementById('screenSel');
+
+const cropControls = document.getElementById('cropControls');
+const zoomRange = document.getElementById('zoomRange');
+const zoomVal = document.getElementById('zoomVal');
+const confirmCropBtn = document.getElementById('confirmCropBtn');
+const reCropBtn = document.getElementById('reCropBtn');
+const canvasLabel = document.getElementById('canvasLabel');
  
 let device = null;
 let charWrite = null;
 let quantizedPixels = null; 
 let currentImage = null; 
 let targetW = 800, targetH = 480;
+
+// 交互状态控制变量
+let isEditMode = true;
+let imgScaleMultiplier = 1.0; // 用户滑块缩放比
+let initialScale = 1.0;       // 撑满容器的基础缩放比
+let panX = 0, panY = 0;       // 平移偏移量
+let isDragging = false;
+let startX = 0, startY = 0;
  
 const PALETTE = [
   [0, 0, 0],       
@@ -125,40 +158,137 @@ fileInput.addEventListener('change', e => {
     const img = new Image();
     img.onload = () => {
       currentImage = img; 
-      processAndRender();
+      initImageTransform();
     };
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
 });
 
-ditherSelect.addEventListener('change', () => { if(currentImage) processAndRender(); });
-resSelect.addEventListener('change', () => { if(currentImage) processAndRender(); });
-
-// 图像处理与智能裁剪
-function processAndRender() {
-  if(!currentImage) return;
-  
+// 初始化图片大小及居中参数
+function initImageTransform() {
+  if (!currentImage) return;
   [targetW, targetH] = resSelect.value.split(',').map(Number);
   previewCanvas.width = targetW;
   previewCanvas.height = targetH;
-  const ctx = previewCanvas.getContext('2d');
   
-  // 清理画布
+  // 基础缩放：采用 Object-fit: cover 刚好撑满的逻辑作为 100% 基准
+  initialScale = Math.max(targetW / currentImage.width, targetH / currentImage.height);
+  imgScaleMultiplier = 1.0;
+  zoomRange.value = 100;
+  zoomVal.innerText = "100%";
+  
+  // 默认居中
+  const scaledW = currentImage.width * initialScale;
+  const scaledH = currentImage.height * initialScale;
+  panX = (targetW - scaledW) / 2;
+  panY = (targetH - scaledH) / 2;
+  
+  enterEditMode();
+}
+
+function enterEditMode() {
+  isEditMode = true;
+  previewCanvas.style.cursor = 'grab';
+  canvasLabel.innerText = "图片视口（拖拽与缩放微调中...）：";
+  cropControls.style.display = 'block';
+  reCropBtn.style.display = 'none';
+  sendBtn.disabled = true;
+  drawEditCanvas();
+}
+
+// 实时渲染交互层（原图不卡顿）
+function drawEditCanvas() {
+  if (!currentImage || !isEditMode) return;
+  const ctx = previewCanvas.getContext('2d');
   ctx.clearRect(0, 0, targetW, targetH);
   
-  // 【核心算法】保持纵横比缩放并自动居中裁剪 (Aspect Fill)
-  const scale = Math.max(targetW / currentImage.width, targetH / currentImage.height);
-  const scaledW = currentImage.width * scale;
-  const scaledH = currentImage.height * scale;
+  // 计算当前组合缩放比
+  const currentScale = initialScale * imgScaleMultiplier;
+  const w = currentImage.width * currentScale;
+  const h = currentImage.height * currentScale;
   
-  // 计算居中偏移量，负值代表图像超出画布被裁剪掉的距离
-  const dx = (targetW - scaledW) / 2;
-  const dy = (targetH - scaledH) / 2;
+  ctx.drawImage(currentImage, panX, panY, w, h);
+}
+
+// 监听缩放滑块
+zoomRange.addEventListener('input', e => {
+  imgScaleMultiplier = parseInt(e.target.value) / 100;
+  zoomVal.innerText = e.target.value + "%";
+  drawEditCanvas();
+});
+
+// 鼠标拖拽事件
+previewCanvas.addEventListener('mousedown', e => {
+  if (!isEditMode || !currentImage) return;
+  isDragging = true;
+  startX = e.clientX - panX;
+  startY = e.clientY - panY;
+  previewCanvas.style.cursor = 'grabbing';
+});
+
+window.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  panX = e.clientX - startX;
+  panY = e.clientY - startY;
+  drawEditCanvas();
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDragging) {
+    isDragging = false;
+    previewCanvas.style.cursor = 'grab';
+  }
+});
+
+// 手机移动端触控支持
+previewCanvas.addEventListener('touchstart', e => {
+  if (!isEditMode || !currentImage) return;
+  isDragging = true;
+  const touch = e.touches[0];
+  startX = touch.clientX - panX;
+  startY = touch.clientY - panY;
+});
+
+previewCanvas.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  const touch = e.touches[0];
+  panX = touch.clientX - startX;
+  panY = touch.clientY - startY;
+  drawEditCanvas();
+  e.preventDefault(); // 阻止移动端浏览器整页滚动弹性
+}, { passive: false });
+
+window.addEventListener('touchend', () => { isDragging = false; });
+
+// 确认裁剪并应用抖动算法
+confirmCropBtn.addEventListener('click', () => {
+  if (!currentImage) return;
+  isEditMode = false;
+  previewCanvas.style.cursor = 'default';
+  canvasLabel.innerText = "效果预览（最终锁定像素 & 七色转换）：";
+  cropControls.style.display = 'none';
+  reCropBtn.style.display = 'block';
   
-  // 绘制裁剪后的图像
-  ctx.drawImage(currentImage, dx, dy, scaledW, scaledH);
-  
+  applyDitheringProcess();
+});
+
+// 重新唤醒编辑
+reCropBtn.addEventListener('click', enterEditMode);
+
+// 选项联动的容错处理
+ditherSelect.addEventListener('change', () => { 
+  if (currentImage && !isEditMode) {
+    drawEditCanvas(); // 先画原图视图
+    applyDitheringProcess(); // 再套用新算法
+  } 
+});
+resSelect.addEventListener('change', () => { if(currentImage) initImageTransform(); });
+
+
+function applyDitheringProcess() {
+  const ctx = previewCanvas.getContext('2d');
+  // 精确抓取当前分辨率画布边界内的原始像素
   const imgData = ctx.getImageData(0, 0, targetW, targetH);
   const algo = ditherSelect.value;
   
