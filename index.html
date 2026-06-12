@@ -1,1 +1,451 @@
-pbpaste > index.html
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>ESP32七色墨水屏 蓝牙传图(高级抖动版)</title>
+
+<style>
+
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system}
+
+body{padding:16px;background:#f5f5f5}
+
+.container{max-width:600px;margin:0 auto;background:#fff;padding:20px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.05)}
+
+h2{text-align:center;margin-bottom:20px;color:#333}
+
+.btn{display:block;width:100%;padding:12px;margin:8px 0;border:none;border-radius:8px;font-size:16px;cursor:pointer;font-weight:bold;transition:background 0.2s}
+
+.btn-blue{background:#007aff;color:#fff}
+
+.btn-blue:hover{background:#0063cc}
+
+.btn:disabled{background:#ccc;cursor:not-allowed}
+
+#file-input{display:none}
+
+.img-preview{width:100%;height:auto;margin:12px 0;border:1px solid #eee;border-radius:8px;display:block}
+
+.info{margin:12px 0;padding:10px;background:#f0f0f0;border-radius:6px;font-size:14px;border-left:4px solid #007aff;word-break:break-all}
+
+.row{margin:10px 0}
+
+label{display:block;margin:6px 0;font-weight:500}
+
+select,input{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:15px}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+  <h2>七色墨水屏 蓝牙传图</h2>
+
+ 
+
+  <button class="btn btn-blue" id="connectBtn">连接蓝牙设备</button>
+
+  <div class="info" id="status">状态：未连接 (由于浏览器安全限制，请确保使用 HTTPS 访问)</div>
+
+ 
+
+  <div class="row">
+
+    <label>屏幕分辨率</label>
+
+    <select id="resSelect">
+
+      <option value="800,480" selected>800 × 480 (7.3/7.5寸 七色屏)</option>
+
+    </select>
+
+  </div>
+
+ 
+
+  <div class="row">
+
+    <label>选择屏幕(双面屏)</label>
+
+    <select id="screenSel">
+
+      <option value="0" selected>A面</option>
+
+      <option value="1">B面</option>
+
+    </select>
+
+  </div>
+
+ 
+
+  <button class="btn btn-blue" id="selectImgBtn">选择图片</button>
+
+  <input type="file" id="file-input" accept="image/*">
+
+  
+
+  <label>效果预览（抖动后七色）：</label>
+
+  <canvas id="previewCanvas" style="width:100%; border:1px solid #eee; border-radius:8px; margin:8px 0;"></canvas>
+
+ 
+
+  <button class="btn btn-blue" id="sendBtn" disabled>发送到屏幕</button>
+
+</div>
+
+ 
+
+<script>
+
+const connectBtn = document.getElementById('connectBtn');
+
+const selectImgBtn = document.getElementById('selectImgBtn');
+
+const sendBtn = document.getElementById('sendBtn');
+
+const fileInput = document.getElementById('file-input');
+
+const previewCanvas = document.getElementById('previewCanvas');
+
+const status = document.getElementById('status');
+
+const resSelect = document.getElementById('resSelect');
+
+const screenSel = document.getElementById('screenSel');
+
+ 
+
+let device = null;
+
+let charWrite = null;
+
+let quantizedPixels = null; // 存储量化后的 0-6 颜色索引数组
+
+let targetW = 800, targetH = 480;
+
+ 
+
+// 七色墨水屏标准固件颜色定义 (RGB)
+
+const PALETTE = [
+
+  [0, 0, 0],       // 0: 黑 Black
+
+  [255, 255, 255], // 1: 白 White
+
+  [0, 128, 0],     // 2: 绿 Green
+
+  [0, 0, 255],     // 3: 蓝 Blue
+
+  [255, 0, 0],     // 4: 红 Red
+
+  [255, 255, 0],   // 5: 黄 Yellow
+
+  [255, 128, 0]    // 6: 橙 Orange
+
+];
+
+ 
+
+const SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb";
+
+const WRITE_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb";
+
+ 
+
+// Web Bluetooth 连接
+
+connectBtn.addEventListener('click', async () => {
+
+  try {
+
+    status.innerText = "状态：正在搜索蓝牙设备...";
+
+    const dev = await navigator.bluetooth.requestDevice({
+
+      filters: [{ services: [SERVICE_UUID] }]
+
+    });
+
+    device = dev;
+
+    dev.addEventListener('gattserverdisconnected', () => {
+
+      status.innerText = "状态：设备已断开";
+
+      sendBtn.disabled = true;
+
+      charWrite = null;
+
+    });
+
+    const server = await dev.gatt.connect();
+
+    const service = await server.getPrimaryService(SERVICE_UUID);
+
+    charWrite = await service.getCharacteristic(WRITE_UUID);
+
+    status.innerText = "状态：连接成功！可选择图片发送";
+
+  } catch (err) {
+
+    status.innerText = "状态：连接失败 " + err.message;
+
+    console.error(err);
+
+  }
+
+});
+
+ 
+
+selectImgBtn.addEventListener('click', () => fileInput.click());
+
+ 
+
+fileInput.addEventListener('change', e => {
+
+  const file = e.target.files[0];
+
+  if(!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = ev => {
+
+    const img = new Image();
+
+    img.onload = () => {
+
+      [targetW, targetH] = resSelect.value.split(',').map(Number);
+
+      previewCanvas.width = targetW;
+
+      previewCanvas.height = targetH;
+
+      const ctx = previewCanvas.getContext('2d');
+
+      ctx.drawImage(img, 0, 0, targetW, targetH);
+
+      
+
+      const imgData = ctx.getImageData(0, 0, targetW, targetH);
+
+      // 执行七色Floyd-Steinberg误差扩散抖动
+
+      quantizedPixels = processSevenColorDither(imgData);
+
+      
+
+      // 将处理后的七色重新绘制回Canvas供用户预览真实效果
+
+      const ditheredImgData = ctx.createImageData(targetW, targetH);
+
+      for(let i=0; i<quantizedPixels.length; i++) {
+
+        const color = PALETTE[quantizedPixels[i]];
+
+        ditheredImgData.data[i*4]   = color[0];
+
+        ditheredImgData.data[i*4+1] = color[1];
+
+        ditheredImgData.data[i*4+2] = color[2];
+
+        ditheredImgData.data[i*4+3] = 255;
+
+      }
+
+      ctx.putImageData(ditheredImgData, 0, 0);
+
+      sendBtn.disabled = false;
+
+    };
+
+    img.src = ev.target.result;
+
+  };
+
+  reader.readAsDataURL(file);
+
+});
+
+ 
+
+// 七色抖动核心算法
+
+function processSevenColorDither(imgData) {
+
+  const w = imgData.width;
+
+  const h = imgData.height;
+
+  const ds = new Float32Array(imgData.data); // 转为浮点数方便扩散误差
+
+  const outIndices = new Uint8Array(w * h);
+
+ 
+
+  const getPos = (x, y) => (y * w + x) * 4;
+
+ 
+
+  for (let y = 0; y < h; y++) {
+
+    for (let x = 0; x < w; x++) {
+
+      const idx = getPos(x, y);
+
+      const r = ds[idx], g = ds[idx+1], b = ds[idx+2];
+
+ 
+
+      // 寻找调色板中欧氏距离最近的七色之一
+
+      let minDst = Infinity;
+
+      let colorIdx = 0;
+
+      for (let i = 0; i < PALETTE.length; i++) {
+
+        const dr = r - PALETTE[i][0];
+
+        const dg = g - PALETTE[i][1];
+
+        const db = b - PALETTE[i][2];
+
+        const dst = dr*dr + dg*dg + db*db;
+
+        if (dst < minDst) { minDst = dst; colorIdx = i; }
+
+      }
+
+ 
+
+      outIndices[y * w + x] = colorIdx;
+
+ 
+
+      // 计算误差
+
+      const errR = r - PALETTE[colorIdx][0];
+
+      const errG = g - PALETTE[colorIdx][1];
+
+      const errB = b - PALETTE[colorIdx][2];
+
+ 
+
+      // Floyd-Steinberg 误差扩散
+
+      if (x + 1 < w)  { let i = getPos(x+1, y);   ds[i]+=errR*7/16; ds[i+1]+=errG*7/16; ds[i+2]+=errB*7/16; }
+
+      if (y + 1 < h) {
+
+        if (x > 0)    { let i = getPos(x-1, y+1); ds[i]+=errR*3/16; ds[i+1]+=errG*3/16; ds[i+2]+=errB*3/16; }
+
+        let i = getPos(x, y+1);     ds[i]+=errR*5/16; ds[i+1]+=errG*5/16; ds[i+2]+=errB*5/16;
+
+        if (x + 1 < w) { let i = getPos(x+1, y+1); ds[i]+=errR*1/16; ds[i+1]+=errG*1/16; ds[i+2]+=errB*1/16; }
+
+      }
+
+    }
+
+  }
+
+  return outIndices;
+
+}
+
+ 
+
+async function sendBuffer(buf){
+
+  const chunk = 200; // 蓝牙每包大小限制
+
+  for(let i=0; i<buf.byteLength; i+=chunk){
+
+    const slice = buf.slice(i, i+chunk);
+
+    await charWrite.writeValueWithoutResponse(slice);
+
+    await new Promise(r=>setTimeout(r,20)); // 略微增加延时确保ESP32能稳定接收
+
+  }
+
+}
+
+ 
+
+sendBtn.addEventListener('click', async () => {
+
+  if(!charWrite || !quantizedPixels) return;
+
+  sendBtn.disabled = true;
+
+  status.innerText = "状态：正在传输图片数据...";
+
+  try {
+
+    const screenIdx = parseInt(screenSel.value);
+
+    // 1. 发送帧头 (5字节)
+
+    const header = new Uint8Array([screenIdx, targetW&0xff, (targetW>>8)&0xff, targetH&0xff, (targetH>>8)&0xff]);
+
+    await sendBuffer(header);
+
+ 
+
+    // 2. 压缩像素：七色屏常用格式为一个字节存储两个像素点 (4-bit per pixel)
+
+    // 比如：像素0值是4(红)，像素1值是1(白) -> 组合成一个字节 (4 << 4) | 1
+
+    const packedBuffer = new Uint8Array((targetW * targetH) / 2);
+
+    for(let i = 0; i < quantizedPixels.length; i += 2) {
+
+      const p1 = quantizedPixels[i] & 0x0F;
+
+      const p2 = quantizedPixels[i+1] & 0x0F;
+
+      packedBuffer[i / 2] = (p1 << 4) | p2;
+
+    }
+
+ 
+
+    await sendBuffer(packedBuffer.buffer);
+
+    status.innerText = "状态：发送完成！屏显正在刷新...";
+
+  } catch(err) {
+
+    status.innerText = "状态：发送失败 " + err.message;
+
+    console.error(err);
+
+  } finally {
+
+    sendBtn.disabled = false;
+
+  }
+
+});
+
+</script>
+
+</body>
+
+</html> 
