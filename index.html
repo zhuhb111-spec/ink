@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ESP32七色墨水屏 蓝牙传图(高级抖动版)</title>
+<title>ESP32七色墨水屏 蓝牙传图(智能裁剪版)</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system}
 body{padding:16px;background:#f5f5f5}
@@ -34,6 +34,16 @@ select,input{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;fon
       <option value="800,480" selected>800 × 480 (7.3/7.5寸 七色屏)</option>
     </select>
   </div>
+
+  <div class="row">
+    <label>抖动算法选择</label>
+    <select id="ditherSelect">
+      <option value="floyd" selected>Floyd-Steinberg (细腻，适合风景照片)</option>
+      <option value="atkinson">Atkinson (干净高对比，墨水屏绝配)</option>
+      <option value="sierra">Sierra Lite (快速均匀，纹理感强)</option>
+      <option value="none">无抖动 (纯色阶，适合文字/图标/像素画)</option>
+    </select>
+  </div>
  
   <div class="row">
     <label>选择屏幕(双面屏)</label>
@@ -46,7 +56,7 @@ select,input{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;fon
   <button class="btn btn-blue" id="selectImgBtn">选择图片</button>
   <input type="file" id="file-input" accept="image/*">
   
-  <label>效果预览（抖动后七色）：</label>
+  <label>效果预览（智能等比裁剪+七色处理）：</label>
   <canvas id="previewCanvas" style="width:100%; border:1px solid #eee; border-radius:8px; margin:8px 0;"></canvas>
  
   <button class="btn btn-blue" id="sendBtn" disabled>发送到屏幕</button>
@@ -60,11 +70,13 @@ const fileInput = document.getElementById('file-input');
 const previewCanvas = document.getElementById('previewCanvas');
 const status = document.getElementById('status');
 const resSelect = document.getElementById('resSelect');
+const ditherSelect = document.getElementById('ditherSelect');
 const screenSel = document.getElementById('screenSel');
  
 let device = null;
 let charWrite = null;
 let quantizedPixels = null; 
+let currentImage = null; 
 let targetW = 800, targetH = 480;
  
 const PALETTE = [
@@ -80,7 +92,6 @@ const PALETTE = [
 const SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb";
 const WRITE_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb";
  
-// Web Bluetooth 连接（已放宽过滤条件）
 connectBtn.addEventListener('click', async () => {
   try {
     status.innerText = "状态：正在搜索蓝牙设备...";
@@ -113,59 +124,94 @@ fileInput.addEventListener('change', e => {
   reader.onload = ev => {
     const img = new Image();
     img.onload = () => {
-      [targetW, targetH] = resSelect.value.split(',').map(Number);
-      previewCanvas.width = targetW;
-      previewCanvas.height = targetH;
-      const ctx = previewCanvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, targetW, targetH);
-      
-      const imgData = ctx.getImageData(0, 0, targetW, targetH);
-      quantizedPixels = processSevenColorDither(imgData);
-      
-      const ditheredImgData = ctx.createImageData(targetW, targetH);
-      for(let i=0; i<quantizedPixels.length; i++) {
-        const color = PALETTE[quantizedPixels[i]];
-        ditheredImgData.data[i*4]   = color[0];
-        ditheredImgData.data[i*4+1] = color[1];
-        ditheredImgData.data[i*4+2] = color[2];
-        ditheredImgData.data[i*4+3] = 255;
-      }
-      ctx.putImageData(ditheredImgData, 0, 0);
-      sendBtn.disabled = false;
+      currentImage = img; 
+      processAndRender();
     };
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
 });
+
+ditherSelect.addEventListener('change', () => { if(currentImage) processAndRender(); });
+resSelect.addEventListener('change', () => { if(currentImage) processAndRender(); });
+
+// 图像处理与智能裁剪
+function processAndRender() {
+  if(!currentImage) return;
+  
+  [targetW, targetH] = resSelect.value.split(',').map(Number);
+  previewCanvas.width = targetW;
+  previewCanvas.height = targetH;
+  const ctx = previewCanvas.getContext('2d');
+  
+  // 清理画布
+  ctx.clearRect(0, 0, targetW, targetH);
+  
+  // 【核心算法】保持纵横比缩放并自动居中裁剪 (Aspect Fill)
+  const scale = Math.max(targetW / currentImage.width, targetH / currentImage.height);
+  const scaledW = currentImage.width * scale;
+  const scaledH = currentImage.height * scale;
+  
+  // 计算居中偏移量，负值代表图像超出画布被裁剪掉的距离
+  const dx = (targetW - scaledW) / 2;
+  const dy = (targetH - scaledH) / 2;
+  
+  // 绘制裁剪后的图像
+  ctx.drawImage(currentImage, dx, dy, scaledW, scaledH);
+  
+  const imgData = ctx.getImageData(0, 0, targetW, targetH);
+  const algo = ditherSelect.value;
+  
+  if (algo === 'floyd') {
+    quantizedPixels = ditherFloydSteinberg(imgData);
+  } else if (algo === 'atkinson') {
+    quantizedPixels = ditherAtkinson(imgData);
+  } else if (algo === 'sierra') {
+    quantizedPixels = ditherSierraLite(imgData);
+  } else {
+    quantizedPixels = ditherNone(imgData);
+  }
+  
+  const ditheredImgData = ctx.createImageData(targetW, targetH);
+  for(let i=0; i<quantizedPixels.length; i++) {
+    const color = PALETTE[quantizedPixels[i]];
+    ditheredImgData.data[i*4]   = color[0];
+    ditheredImgData.data[i*4+1] = color[1];
+    ditheredImgData.data[i*4+2] = color[2];
+    ditheredImgData.data[i*4+3] = 255;
+  }
+  ctx.putImageData(ditheredImgData, 0, 0);
+  sendBtn.disabled = false;
+}
+
+function findClosestColor(r, g, b) {
+  let minDst = Infinity;
+  let colorIdx = 0;
+  for (let i = 0; i < PALETTE.length; i++) {
+    const dr = r - PALETTE[i][0];
+    const dg = g - PALETTE[i][1];
+    const db = b - PALETTE[i][2];
+    const dst = dr*dr + dg*dg + db*db;
+    if (dst < minDst) { minDst = dst; colorIdx = i; }
+  }
+  return colorIdx;
+}
  
-function processSevenColorDither(imgData) {
-  const w = imgData.width;
-  const h = imgData.height;
+function ditherFloydSteinberg(imgData) {
+  const w = imgData.width, h = imgData.height;
   const ds = new Float32Array(imgData.data); 
-  const outIndices = new Uint8Array(w * h);
- 
+  const out = new Uint8Array(w * h);
   const getPos = (x, y) => (y * w + x) * 4;
  
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = getPos(x, y);
-      const r = ds[idx], g = ds[idx+1], b = ds[idx+2];
+      const colorIdx = findClosestColor(ds[idx], ds[idx+1], ds[idx+2]);
+      out[y * w + x] = colorIdx;
  
-      let minDst = Infinity;
-      let colorIdx = 0;
-      for (let i = 0; i < PALETTE.length; i++) {
-        const dr = r - PALETTE[i][0];
-        const dg = g - PALETTE[i][1];
-        const db = b - PALETTE[i][2];
-        const dst = dr*dr + dg*dg + db*db;
-        if (dst < minDst) { minDst = dst; colorIdx = i; }
-      }
- 
-      outIndices[y * w + x] = colorIdx;
- 
-      const errR = r - PALETTE[colorIdx][0];
-      const errG = g - PALETTE[colorIdx][1];
-      const errB = b - PALETTE[colorIdx][2];
+      const errR = ds[idx] - PALETTE[colorIdx][0];
+      const errG = ds[idx+1] - PALETTE[colorIdx][1];
+      const errB = ds[idx+2] - PALETTE[colorIdx][2];
  
       if (x + 1 < w)  { let i = getPos(x+1, y);   ds[i]+=errR*7/16; ds[i+1]+=errG*7/16; ds[i+2]+=errB*7/16; }
       if (y + 1 < h) {
@@ -175,7 +221,71 @@ function processSevenColorDither(imgData) {
       }
     }
   }
-  return outIndices;
+  return out;
+}
+
+function ditherAtkinson(imgData) {
+  const w = imgData.width, h = imgData.height;
+  const ds = new Float32Array(imgData.data); 
+  const out = new Uint8Array(w * h);
+  const getPos = (x, y) => (y * w + x) * 4;
+ 
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = getPos(x, y);
+      const colorIdx = findClosestColor(ds[idx], ds[idx+1], ds[idx+2]);
+      out[y * w + x] = colorIdx;
+ 
+      const errR = (ds[idx] - PALETTE[colorIdx][0]) / 8;
+      const errG = (ds[idx+1] - PALETTE[colorIdx][1]) / 8;
+      const errB = (ds[idx+2] - PALETTE[colorIdx][2]) / 8;
+ 
+      if (x + 1 < w)  { let i = getPos(x+1, y);   ds[i]+=errR; ds[i+1]+=errG; ds[i+2]+=errB; }
+      if (x + 2 < w)  { let i = getPos(x+2, y);   ds[i]+=errR; ds[i+1]+=errG; ds[i+2]+=errB; }
+      if (y + 1 < h) {
+        if (x > 0)    { let i = getPos(x-1, y+1); ds[i]+=errR; ds[i+1]+=errG; ds[i+2]+=errB; }
+        let i = getPos(x, y+1);    ds[i]+=errR; ds[i+1]+=errG; ds[i+2]+=errB;
+        if (x + 1 < w) { let i = getPos(x+1, y+1); ds[i]+=errR; ds[i+1]+=errG; ds[i+2]+=errB; }
+      }
+      if (y + 2 < h)  { let i = getPos(x, y+2);   ds[i]+=errR; ds[i+1]+=errG; ds[i+2]+=errB; }
+    }
+  }
+  return out;
+}
+
+function ditherSierraLite(imgData) {
+  const w = imgData.width, h = imgData.height;
+  const ds = new Float32Array(imgData.data); 
+  const out = new Uint8Array(w * h);
+  const getPos = (x, y) => (y * w + x) * 4;
+ 
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = getPos(x, y);
+      const colorIdx = findClosestColor(ds[idx], ds[idx+1], ds[idx+2]);
+      out[y * w + x] = colorIdx;
+ 
+      const errR = ds[idx] - PALETTE[colorIdx][0];
+      const errG = ds[idx+1] - PALETTE[colorIdx][1];
+      const errB = ds[idx+2] - PALETTE[colorIdx][2];
+ 
+      if (x + 1 < w)  { let i = getPos(x+1, y);   ds[i]+=errR*2/4; ds[i+1]+=errG*2/4; ds[i+2]+=errB*2/4; }
+      if (y + 1 < h) {
+        if (x > 0)    { let i = getPos(x-1, y+1); ds[i]+=errR*1/4; ds[i+1]+=errG*1/4; ds[i+2]+=errB*1/4; }
+        let i = getPos(x, y+1);    ds[i]+=errR*1/4; ds[i+1]+=errG*1/4; ds[i+2]+=errB*1/4;
+      }
+    }
+  }
+  return out;
+}
+
+function ditherNone(imgData) {
+  const w = imgData.width, h = imgData.height;
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    out[i] = findClosestColor(imgData.data[i*4], imgData.data[i*4+1], imgData.data[i*4+2]);
+  }
+  return out;
 }
  
 async function sendBuffer(buf){
